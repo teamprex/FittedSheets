@@ -168,13 +168,19 @@ public class SheetViewController: UIViewController {
     private var panGestureRecognizer: InitialTouchPanGestureRecognizer!
     private var prePanHeight: CGFloat = 0
     private var isPanning: Bool = false
-    
+    private var maxSize: SheetSize = .fullscreen
+
     public var contentBackgroundColor: UIColor? {
         get { self.contentViewController.contentBackgroundColor }
         set { self.contentViewController.contentBackgroundColor = newValue }
     }
     
-    public init(controller: UIViewController, sizes: [SheetSize] = [.intrinsic], options: SheetOptions? = nil) {
+    public init(
+        controller: UIViewController,
+        sizes: [SheetSize] = [.intrinsic],
+        maxSize: SheetSize = .fullscreen,
+        options: SheetOptions? = nil
+    ) {
         let options = options ?? SheetOptions.default
         self.contentViewController = SheetContentViewController(childViewController: controller, options: options)
         if #available(iOS 13.0, *) {
@@ -183,6 +189,7 @@ public class SheetViewController: UIViewController {
             self.contentViewController.contentBackgroundColor = UIColor.white
         }
         self.sizes = sizes.count > 0 ? sizes : [.intrinsic]
+        self.maxSize = maxSize
         self.options = options
         self.transition = SheetTransition(options: options)
         self.minimumSpaceAbovePullBar = SheetViewController.minimumSpaceAbovePullBar
@@ -231,7 +238,12 @@ public class SheetViewController: UIViewController {
         self.contentViewController.updatePreferredHeight()
         self.resize(to: self.currentSize, animated: false)
     }
-    
+
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        updateValidSizes()
+    }
+
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
     }
@@ -529,31 +541,54 @@ public class SheetViewController: UIViewController {
         })
     }
     
-    private func height(for size: SheetSize?) -> CGFloat {
+    private func height(for size: SheetSize?, limitToMaxHeight: Bool = false) -> CGFloat {
         guard let size = size else { return 0 }
-        let contentHeight: CGFloat
         let fullscreenHeight: CGFloat
         if self.options.useFullScreenMode {
             fullscreenHeight = self.view.bounds.height - self.minimumSpaceAbovePullBar
         } else {
             fullscreenHeight = self.view.bounds.height - self.view.compatibleSafeAreaInsets.top - self.minimumSpaceAbovePullBar
         }
-        switch (size) {
-            case .fixed(let height):
-                contentHeight = height + self.keyboardHeight
-            case .fullscreen:
-                contentHeight = fullscreenHeight
-            case .intrinsic:
-                contentHeight = self.contentViewController.preferredHeight + self.keyboardHeight
-            case .percent(let percent):
-                if (percent > 1) {
-                    debugPrint("Size percent should be less than or equal to 1.0, but was set to \(percent))")
-                }
-                contentHeight = (self.view.bounds.height) * CGFloat(percent) + self.keyboardHeight
-            case .marginFromTop(let margin):
-                contentHeight = (self.view.bounds.height) - margin + self.keyboardHeight
+        let contentHeight = calculateHeight(for: size)
+        let maxHeight = calculateHeight(for: maxSize)
+        if limitToMaxHeight {
+            return min(min(fullscreenHeight, contentHeight), maxHeight)
         }
-        return min(fullscreenHeight, contentHeight)
+        else {
+            return min(fullscreenHeight, contentHeight)
+        }
+    }
+
+    private func calculateHeight(for size: SheetSize) -> CGFloat {
+        let fullscreenHeight: CGFloat
+        if self.options.useFullScreenMode {
+            fullscreenHeight = self.view.bounds.height - self.minimumSpaceAbovePullBar
+        } else {
+            fullscreenHeight = self.view.bounds.height - self.view.compatibleSafeAreaInsets.top - self.minimumSpaceAbovePullBar
+        }
+        switch size {
+        case .fixed(let height):
+            return height + self.keyboardHeight
+        case .fullscreen:
+            return fullscreenHeight
+        case .intrinsic:
+            return self.contentViewController.preferredHeight + self.keyboardHeight
+        case .percent(let percent):
+            if (percent > 1) {
+                debugPrint("Size percent should be less than or equal to 1.0, but was set to \(percent))")
+            }
+            return self.view.bounds.height * CGFloat(percent) + self.keyboardHeight
+        case .marginFromTop(let margin):
+            return self.view.bounds.height - margin + self.keyboardHeight
+        }
+    }
+
+    private func updateValidSizes() {
+        self.sizes = sizes.filter { size in
+            let contentHeight: CGFloat = calculateHeight(for: size)
+            let maxHeight: CGFloat = calculateHeight(for: maxSize)
+            return contentHeight <= maxHeight
+        }
     }
 
     // https://medium.com/thoughts-on-thoughts/recreating-apple-s-rubber-band-effect-in-swift-dbf981b40f35
@@ -572,31 +607,22 @@ public class SheetViewController: UIViewController {
         
         let oldConstraintHeight = self.contentViewHeightConstraint.constant
         
-        let newHeight = self.height(for: size)
+        let newHeight = self.height(
+            for: size,
+            limitToMaxHeight: true)
         
         guard oldConstraintHeight != newHeight else {
             return
         }
         
-        if animated {
-            UIView.animate(withDuration: duration, delay: 0, options: options, animations: { [weak self] in
-                guard let self = self, let constraint = self.contentViewHeightConstraint else { return }
-                constraint.constant = newHeight
-                self.view.layoutIfNeeded()
-            }, completion: { _ in
-                if previousSize != size {
-                    self.sizeChanged?(self, size, newHeight)
-                }
-                self.contentViewController.updateAfterLayout()
-                complete?()
-            })
-        } else {
-            UIView.performWithoutAnimation {
-                self.contentViewHeightConstraint?.constant = self.height(for: size)
-                self.contentViewController.view.layoutIfNeeded()
-            }
-            complete?()
+        guard let constraint = self.contentViewHeightConstraint else { return }
+        constraint.constant = newHeight
+        self.view.layoutIfNeeded()
+        if previousSize != size {
+            self.sizeChanged?(self, size, newHeight)
         }
+        self.contentViewController.updateAfterLayout()
+        complete?()
     }
     
     public func attemptDismiss(animated: Bool) {
