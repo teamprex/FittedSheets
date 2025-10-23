@@ -589,6 +589,9 @@ public class SheetViewController: UIViewController {
             let maxHeight: CGFloat = calculateHeight(for: maxSize)
             return contentHeight <= maxHeight
         }
+        if sizes.isEmpty {
+            sizes.append(maxSize)
+        }
     }
 
     // https://medium.com/thoughts-on-thoughts/recreating-apple-s-rubber-band-effect-in-swift-dbf981b40f35
